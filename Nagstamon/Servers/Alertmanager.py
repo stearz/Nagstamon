@@ -25,6 +25,14 @@
 #
 # Release Notes:
 #
+#   [1.2.0] - 2021-06-10:
+#     * changed:
+#         Removed dependencies to the Prometheus integration
+#         
+#     * added:
+#         Maps to let the user define which severity values should be interoreted as critical or warning
+#         Support for duplicate tupels of (hostname,servicename)
+#
 #   [1.1.0] - 2021-05-18:
 #     * changed:
 #         Using logging module for all outputs
@@ -55,8 +63,8 @@ import dateutil.parser
 import requests
 
 from Nagstamon.Config import conf
-from Nagstamon.Objects import (GenericHost, Result)
-from Nagstamon.Servers.Prometheus import PrometheusServer, PrometheusService
+from Nagstamon.Objects import (GenericHost,GenericService,Result)
+from Nagstamon.Servers.Generic import GenericServer
 from Nagstamon.Helpers import webbrowser_open
 
 # logging --------------------------------------------
@@ -75,14 +83,15 @@ log.addHandler(handler)
 # ----------------------------------------------------
 
 
-class AlertmanagerService(PrometheusService):
+class AlertmanagerService(GenericService):
     """
     add Alertmanager specific service property to generic service class
     """
     service_object_id = ""
+    labels = {}
 
 
-class AlertmanagerServer(PrometheusServer):
+class AlertmanagerServer(GenericServer):
     """
     special treatment for Alertmanager API
     """
@@ -107,6 +116,52 @@ class AlertmanagerServer(PrometheusServer):
     map_to_status_information = ''
     name = ''
     alertmanager_filter = ''
+
+    def init_HTTP(self):
+        """
+        things to do if HTTP is not initialized
+        """
+        GenericServer.init_HTTP(self)
+
+        # prepare for JSON
+        self.session.headers.update({'Accept': 'application/json',
+                                     'Content-Type': 'application/json'})
+
+    def init_config(self):
+        """
+        dummy init_config, called at thread start
+        """
+        pass
+
+    def get_start_end(self, host):
+        """
+        Set a default of starttime of "now" and endtime is "now + 24 hours"
+        directly from web interface
+        """
+        start = datetime.now()
+        end = datetime.now() + timedelta(hours=24)
+
+        return (str(start.strftime("%Y-%m-%d %H:%M:%S")),
+                str(end.strftime("%Y-%m-%d %H:%M:%S")))
+
+    def _get_duration(self, timestring):
+        """
+        calculates the duration (delta) from Prometheus' activeAt (ISO8601
+        format) until now an returns a human friendly string
+        """
+        time_object = dateutil.parser.parse(timestring)
+        duration = datetime.now(timezone.utc) - time_object
+        h = int(duration.seconds / 3600)
+        m = int(duration.seconds % 3600 / 60)
+        s = int(duration.seconds % 60)
+        if duration.days > 0:
+            return "%sd %sh %02dm %02ds" % (duration.days, h, m, s)
+        elif h > 0:
+            return "%sh %02dm %02ds" % (h, m, s)
+        elif m > 0:
+            return "%02dm %02ds" % (m, s)
+        else:
+            return "%02ds" % (s)
 
     @staticmethod
     def timestring_to_utc(timestring):
@@ -227,7 +282,7 @@ class AlertmanagerServer(PrometheusServer):
                 if not alert_data:
                     break
 
-                service = PrometheusService()
+                service = AlertmanagerService()
                 service.host = alert_data['host']
                 service.name = alert_data['name']
                 service.server = alert_data['server']
@@ -260,6 +315,11 @@ class AlertmanagerServer(PrometheusServer):
         # dummy return in case all is OK
         return Result()
 
+    def open_monitor_webpage(self, host, service):
+        """
+        open monitor from tablewidget context menu
+        """
+        webbrowser_open('%s' % (self.monitor_url))
 
     def open_monitor(self, host, service=''):
         """
