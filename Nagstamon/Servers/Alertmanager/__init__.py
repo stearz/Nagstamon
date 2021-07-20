@@ -1,57 +1,5 @@
 # encoding: utf-8
 
-# Nagstamon - Nagios status monitor for your desktop
-# Copyright (C) 2008-2021 Henri Wahl <henri@nagstamon.de> et al.
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 2 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
-
-# Initial implementation by Stephan Schwarz (@stearz)
-#
-# This Server class connects against Prometheus' Alertmanager.
-# The monitor URL in the setup should be something like
-# http://alertmanager.example.com
-#
-# Release Notes:
-#
-#   [1.2.0] - 2021-06-10:
-#     * changed:
-#         Removed dependencies to the Prometheus integration
-#         
-#     * added:
-#         Maps to let the user define which severity values should be interoreted as critical or warning
-#         Support for duplicate tupels of (hostname,servicename)
-#
-#   [1.1.0] - 2021-05-18:
-#     * changed:
-#         Using logging module for all outputs
-#         Some refactoring for testing support
-#     * added:
-#         Initial tests based on unittest and pylint (see tests/test_Alertmanager.py)
-#
-#   [1.0.2] - 2021-04-10:
-#     * added:
-#         Better debug output
-#
-#   [1.0.1] - 2020-11-27:
-#     * added:
-#         Support for hiding suppressed alerts with the scheduled downtime filter
-#
-#   [1.0.0] - 2020-11-08:
-#     * added:
-#         Inital version
-#
 import sys
 import json
 import re
@@ -67,25 +15,27 @@ from Nagstamon.Objects import (GenericHost,GenericService,Result)
 from Nagstamon.Servers.Generic import GenericServer
 from Nagstamon.Helpers import webbrowser_open
 
-# logging --------------------------------------------
-log = logging.getLogger('Alertmanager.py')
-handler = logging.StreamHandler(sys.stdout)
-if conf.debug_mode is True:
-    log_level = logging.DEBUG
-    handler.setLevel(logging.DEBUG)
-else:
-    log_level = logging.INFO
-    handler.setLevel(logging.INFO)
-log.setLevel(log_level)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-log.addHandler(handler)
-# ----------------------------------------------------
+def start_logging(log_name, debug_mode):
+    logger = logging.getLogger(log_name)
+    handler = logging.StreamHandler(sys.stdout)
+    if debug_mode is True:
+        LOG_LEVEL = logging.DEBUG
+        handler.setLevel(logging.DEBUG)
+    else:
+        LOG_LEVEL = logging.INFO
+        handler.setLevel(logging.INFO)
+    logger.setLevel(LOG_LEVEL)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    return logger
+
+log = start_logging('alertmanager', conf.debug_mode)
 
 
 class AlertmanagerService(GenericService):
     """
-    add Alertmanager specific service property to generic service class
+    add alertmanager specific service property to generic service class
     """
     service_object_id = ""
     labels = {}
@@ -93,11 +43,11 @@ class AlertmanagerService(GenericService):
 
 class AlertmanagerServer(GenericServer):
     """
-    special treatment for Alertmanager API
+    special treatment for alertmanager API
     """
-    TYPE = 'Alertmanager'
+    TYPE = 'alertmanager'
 
-    # Alertmanager actions are limited to visiting the monitor for now
+    # alertmanager actions are limited to visiting the monitor for now
     MENU_ACTIONS = ['Monitor', 'Downtime', 'Acknowledge']
     BROWSER_URLS = {
         'monitor':  '$MONITOR$/#/alerts',
@@ -117,6 +67,7 @@ class AlertmanagerServer(GenericServer):
     name = ''
     alertmanager_filter = ''
 
+
     def init_HTTP(self):
         """
         things to do if HTTP is not initialized
@@ -127,11 +78,12 @@ class AlertmanagerServer(GenericServer):
         self.session.headers.update({'Accept': 'application/json',
                                      'Content-Type': 'application/json'})
 
+
     def init_config(self):
         """
         dummy init_config, called at thread start
         """
-        pass
+
 
     def get_start_end(self, host):
         """
@@ -144,34 +96,45 @@ class AlertmanagerServer(GenericServer):
         return (str(start.strftime("%Y-%m-%d %H:%M:%S")),
                 str(end.strftime("%Y-%m-%d %H:%M:%S")))
 
-    def _get_duration(self, timestring):
+
+    @staticmethod
+    def _get_duration(timestring):
         """
         calculates the duration (delta) from Prometheus' activeAt (ISO8601
         format) until now an returns a human friendly string
         """
         time_object = dateutil.parser.parse(timestring)
         duration = datetime.now(timezone.utc) - time_object
-        h = int(duration.seconds / 3600)
-        m = int(duration.seconds % 3600 / 60)
-        s = int(duration.seconds % 60)
+        hour = int(duration.seconds / 3600)
+        minute = int(duration.seconds % 3600 / 60)
+        second = int(duration.seconds % 60)
         if duration.days > 0:
-            return "%sd %sh %02dm %02ds" % (duration.days, h, m, s)
-        elif h > 0:
-            return "%sh %02dm %02ds" % (h, m, s)
-        elif m > 0:
-            return "%02dm %02ds" % (m, s)
-        else:
-            return "%02ds" % (s)
+            return "%sd %sh %02dm %02ds" % (duration.days, hour, minute, second)
+        if hour > 0:
+            return "%sh %02dm %02ds" % (hour, minute, second)
+        if minute > 0:
+            return "%02dm %02ds" % (minute, second)
+        return "%02ds" % (second)
+
 
     @staticmethod
     def timestring_to_utc(timestring):
+        """Converts time string and returns time for timezone UTC in ISO format
+
+        Args:
+            timestring (string): A time string
+
+        Returns:
+            string: A time string in ISO format
+        """
         local_time = datetime.now(timezone(timedelta(0))).astimezone().tzinfo
         parsed_time = dateutil.parser.parse(timestring)
         utc_time = parsed_time.replace(tzinfo=local_time).astimezone(timezone.utc)
         return utc_time.isoformat()
 
 
-    def _detect_from_labels(self, labels, config_label_list, default_value="", list_delimiter=","):
+    @staticmethod
+    def _detect_from_labels(labels, config_label_list, default_value="", list_delimiter=","):
         result = default_value
         for each_label in config_label_list.split(list_delimiter):
             if each_label in labels:
@@ -183,8 +146,8 @@ class AlertmanagerServer(GenericServer):
     def _process_alert(self, alert):
         result = {}
 
-        # Alertmanager specific extensions
-        generatorURL = alert.get("generatorURL", {})
+        # alertmanager specific extensions
+        generator_url = alert.get("generatorURL", {})
         fingerprint = alert.get("fingerprint", {})
         log.debug("processing alert with fingerprint '%s':", fingerprint)
 
@@ -194,15 +157,17 @@ class AlertmanagerServer(GenericServer):
 
         # skip alerts with none severity
         if severity == "NONE":
-            log.debug("[%s]: detected detected state '%s' and severity '%s' from labels -> skipping alert", fingerprint, state, severity)
+            log.debug("[%s]: detected detected state '%s' and severity '%s' from labels \
+                      -> skipping alert", fingerprint, state, severity)
             return False
-        log.debug("[%s]: detected detected state '%s' and severity '%s' from labels", fingerprint, state, severity)
+        log.debug("[%s]: detected detected state '%s' and severity '%s' from labels",
+                  fingerprint, state, severity)
 
         hostname = self._detect_from_labels(labels,self.map_to_hostname,"unknown")
-        hostname = re.sub(':[0-9]+', '', hostname)        
+        hostname = re.sub(':[0-9]+', '', hostname)
         log.debug("[%s]: detected hostname from labels: '%s'", fingerprint, hostname)
 
-        servicename = self._detect_from_labels(labels,self.map_to_servicename,"unknown")                
+        servicename = self._detect_from_labels(labels,self.map_to_servicename,"unknown")
         log.debug("[%s]: detected servicename from labels: '%s'", fingerprint, servicename)
 
         if "status" in alert:
@@ -213,17 +178,18 @@ class AlertmanagerServer(GenericServer):
         if attempt == "suppressed":
             scheduled_downtime = True
             acknowledged = True
-            log.debug("[%s]: detected status: '%s' -> interpreting as silenced", fingerprint, attempt)
+            log.debug("[%s]: detected status: '%s' -> interpreting as silenced",
+                      fingerprint, attempt)
         else:
             scheduled_downtime = False
             acknowledged = False
             log.debug("[%s]: detected status: '%s'", fingerprint, attempt)
-        
+
         duration = str(self._get_duration(alert["startsAt"]))
 
         annotations = alert.get("annotations", {})
         status_information = self._detect_from_labels(annotations,self.map_to_status_information,'')
-        
+
         result['host'] = str(hostname)
         result['name'] = servicename
         result['server'] = self.name
@@ -234,7 +200,7 @@ class AlertmanagerServer(GenericServer):
         result['scheduled_downtime'] = scheduled_downtime
         result['acknowledged'] = acknowledged
         result['duration'] = duration
-        result['generatorURL'] = generatorURL
+        result['generatorURL'] = generator_url
         result['fingerprint'] = fingerprint
         result['status_information'] = status_information
 
@@ -243,13 +209,17 @@ class AlertmanagerServer(GenericServer):
 
     def _get_status(self):
         """
-        Get status from Alertmanager Server
+        Get status from alertmanager Server
         """
-        
-        log.debug("detection config (map_to_status_information): '%s'", self.map_to_status_information)
-        log.debug("detection config (map_to_hostname): '%s'", self.map_to_hostname)
-        log.debug("detection config (map_to_servicename): '%s'", self.map_to_servicename)
-        log.debug("detection config (alertmanager_filter): '%s'", self.alertmanager_filter)
+
+        log.debug("detection config (map_to_status_information): '%s'",
+                  self.map_to_status_information)
+        log.debug("detection config (map_to_hostname): '%s'",
+                  self.map_to_hostname)
+        log.debug("detection config (map_to_servicename): '%s'",
+                  self.map_to_servicename)
+        log.debug("detection config (alertmanager_filter): '%s'",
+                  self.alertmanager_filter)
 
         # get all alerts from the API server
         try:
@@ -259,12 +229,13 @@ class AlertmanagerServer(GenericServer):
             else:
                 result = self.FetchURL(self.monitor_url + self.API_PATH_ALERTS,
                                        giveback="raw")
-            
+
             if result.status_code == 200:
                 log.debug("received status code '%s' with this content in result.result: \n\
------------------------------------------------------------------------------------------------------------------------------\n\
-%s\
------------------------------------------------------------------------------------------------------------------------------", result.status_code, result.result)
+                           ---------------------------------------------------------------\n\
+                           %s\
+                           ---------------------------------------------------------------",
+                           result.status_code, result.result)
             else:
                 log.error("received status code '%s'", result.status_code)
 
@@ -275,7 +246,7 @@ class AlertmanagerServer(GenericServer):
             # check if any error occured
             errors_occured = self.check_for_error(data, error, status_code)
             if errors_occured is not False:
-                return(errors_occured)
+                return errors_occured
 
             for alert in data:
                 alert_data = self._process_alert(alert)
@@ -294,7 +265,7 @@ class AlertmanagerServer(GenericServer):
                 service.attempt = alert_data['attempt']
                 service.duration = alert_data['duration']
 
-                service.generatorURL = alert_data['generatorURL']
+                service.generator_url = alert_data['generatorURL']
                 service.fingerprint = alert_data['fingerprint']
 
                 service.status_information = alert_data['status_information']
@@ -305,11 +276,11 @@ class AlertmanagerServer(GenericServer):
                     self.new_hosts[service.host].server = self.name
                 self.new_hosts[service.host].services[service.name] = service
 
-        except Exception as e:
+        except Exception as the_exception:
             # set checking flag back to False
             self.isChecking = False
             result, error = self.Error(sys.exc_info())
-            log.exception(e)
+            log.exception(the_exception)
             return Result(result=result, error=error)
 
         # dummy return in case all is OK
@@ -333,7 +304,7 @@ class AlertmanagerServer(GenericServer):
                       end_time, hours, minutes):
 
         # Convert local dates to UTC
-        start_time_dt = self.timestring_to_utc(start_time) 
+        start_time_dt = self.timestring_to_utc(start_time)
         end_time_dt = self.timestring_to_utc(end_time)
 
         # API Spec: https://github.com/prometheus/alertmanager/blob/master/api/v2/openapi.yaml
@@ -388,9 +359,10 @@ class AlertmanagerServer(GenericServer):
                               info_dict['expire_time'])
 
 
-    def _set_acknowledge(self, host, service, author, comment, sticky, notify, persistent, all_services=[], expire_time=None):
+    def _set_acknowledge(self, host, service, author, comment, sticky, notify, persistent,
+                         all_services=[], expire_time=None):
         alert = self.hosts[host].services[service]
-        endsAt = self.timestring_to_utc(expire_time)
+        ends_at = self.timestring_to_utc(expire_time)
 
         cgi_data = {}
         cgi_data["matchers"] = []
@@ -401,10 +373,11 @@ class AlertmanagerServer(GenericServer):
                 "isRegex": False
             })
         cgi_data["startsAt"] = datetime.utcfromtimestamp(time.time()).isoformat()
-        cgi_data["endsAt"] = endsAt or cgi_data["startAt"]
+        cgi_data["endsAt"] = ends_at or cgi_data["startAt"]
         cgi_data["comment"] = comment or "Nagstamon silence"
         cgi_data["createdBy"] = author or "Nagstamon"
         cgi_data = json.dumps(cgi_data)
 
-        result = self.FetchURL(self.monitor_url + self.API_PATH_SILENCES, giveback="raw", cgi_data=cgi_data)
+        result = self.FetchURL(self.monitor_url + self.API_PATH_SILENCES, giveback="raw",
+                               cgi_data=cgi_data)
         return result
